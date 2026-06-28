@@ -1,3 +1,4 @@
+[README.md](https://github.com/user-attachments/files/29432631/README.md)
 # FlightBoard
 
 Standalone flight-tracking firmware for an **ESP32 + 0.96" SSD1306 OLED**. Hits [adsb.lol](https://adsb.lol) directly over WiFi for live aircraft, serves its own config web page from your phone — no Pi, no server, no cloud account. Optional [FlightAware AeroAPI](https://flightaware.com/aeroapi/portal) enrichment for route info (PER>SYD), with a hard **$5/month spend cap** that physically can't be exceeded.
@@ -179,3 +180,20 @@ flightboard-esp32/
     ├── Display.cpp       # SSD1306 renderer (ticker + card modes)
     └── ConfigPortal.cpp # WiFiManager + control web page + NVS persistence
 ```
+
+## Roadmap: Raspberry Pi + HDMI companion dashboard
+
+The ESP32 has no video output, so HDMI/USB-C → HDMI displays cannot be driven
+directly from it. The planned upgrade path keeps the ESP32 as the always-on
+OLED ticker and adds an optional Raspberry Pi running a lightweight web
+dashboard for the big screen:
+
+- **ESP32 + OLED** (this firmware) — always-on, low-power, fits in a small case.
+- **Raspberry Pi + HDMI** (future) — pulls the same adsb.lol feed and shows a
+  full radar map, multi-aircraft list, stats, and large flight cards on any
+  HDMI display. Boots straight into a kiosk Chromium pointed at the Pi's
+  local web app.
+
+Both devices read from the same data source independently, so the OLED keeps
+working even if the Pi is powered off. The companion Pi project is tracked
+separately in the same GitHub org.
