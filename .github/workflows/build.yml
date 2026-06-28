@@ -1,0 +1,86 @@
+name: Build FlightBoard firmware
+
+# Runs every time you commit changes to the main branch.
+# Compiles the firmware, merges it into a single .bin, and publishes
+# both the .bin and the flash.html web flasher to GitHub Pages.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # lets you trigger a build manually from the Actions tab
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Compile firmware
+        run: pio run -e esp32dev
+
+      - name: Locate esptool and partition files
+        id: paths
+        run: |
+          ESPTOOL=$(find ~/.platformio/packages/tool-esptoolpy -name esptool.py | head -1)
+          BOOTAPP=$(find ~/.platformio/packages/framework-arduinoespressif32/tools/partitions -name boot_app0.bin | head -1)
+          echo "esptool=$ESPTOOL" >> $GITHUB_OUTPUT
+          echo "bootapp=$BOOTAPP" >> $GITHUB_OUTPUT
+
+      - name: Merge into single .bin
+        run: |
+          mkdir -p out
+          python "${{ steps.paths.outputs.esptool }}" \
+            --chip esp32 merge_bin \
+            -o out/flightboard-esp32-merged.bin \
+            --flash_mode dio --flash_freq 40m --flash_size 4MB \
+            0x1000  .pio/build/esp32dev/bootloader.bin \
+            0x8000  .pio/build/esp32dev/partitions.bin \
+            0xe000  "${{ steps.paths.outputs.bootapp }}" \
+            0x10000 .pio/build/esp32dev/firmware.bin
+
+      - name: Stage web flasher
+        run: |
+          cp web/flash.html out/index.html
+          cp web/manifest.json out/manifest.json
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
