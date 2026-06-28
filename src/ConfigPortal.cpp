@@ -14,6 +14,9 @@
 #include <ESPmDNS.h>
 #include <Preferences.h>
 #include <WiFiManager.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <time.h>
 
 extern void displayBoot(const char* status);
 extern int  aeroApiCallsThisHour();
@@ -331,6 +334,13 @@ static const char* HTML_PAGE = R"HTML(
     <button type="button" class="btn ghost small" style="margin-top:14px" onclick="if(confirm('Reset the monthly counter to zero? Use this only if FlightAware confirms your billing month rolled over differently.'))location.href='/fa-reset'">Reset monthly counter</button>
   </div>
 
+  <h2>Troubleshooting</h2>
+  <div class="card">
+    <div class="hint" style="margin-top:0;margin-bottom:12px">Not seeing origin/destination on the OLED? Run the diagnostic to see exactly which step is failing (WiFi, NTP, key, budget, or the live API call).</div>
+    <a href="/diag" class="btn ghost small" style="display:block;text-decoration:none;text-align:center;line-height:1">Run AeroAPI diagnostic</a>
+    <div class="hint" style="margin-top:8px">A successful test costs $0.005.</div>
+  </div>
+
   <button type="submit" class="btn">Save &amp; apply</button>
 </section>
 
@@ -524,6 +534,135 @@ static void handleFaReset() {
     "<p style='font-family:sans-serif'><a href='/' style='color:#ffb347'>Back to FlightBoard</a></p>");
 }
 
+
+// --- /diag --------------------------------------------------------------
+// Walks through every step of the AeroAPI enrichment path and reports
+// what's working and what isn't. Visit http://flightboard.local/diag.
+// A successful live test costs $0.005 (one real AeroAPI call against QFA9).
+static void handleDiag() {
+  String r = "<!doctype html><html><head><meta charset='utf-8'>";
+  r += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
+  r += "<title>FlightBoard diag</title><style>";
+  r += "body{font-family:-apple-system,system-ui,sans-serif;background:#0a0e1a;color:#e6e6e6;padding:20px;max-width:560px;margin:auto;font-size:14px;line-height:1.55}";
+  r += "h1{color:#ffb347;font-size:20px} h2{color:#ffb347;font-size:14px;text-transform:uppercase;letter-spacing:.5px;margin-top:24px}";
+  r += ".ok{color:#7ec97f} .bad{color:#ff6b6b} .warn{color:#ffb347}";
+  r += ".row{padding:8px 0;border-bottom:1px solid #1f2738;display:flex;justify-content:space-between;gap:10px}";
+  r += ".k{color:#8b95a7} .v{font-family:Menlo,monospace;text-align:right;word-break:break-all}";
+  r += "a{color:#ffb347} pre{background:#131829;padding:12px;border-radius:8px;overflow:auto;font-size:12px;white-space:pre-wrap}";
+  r += "</style></head><body><h1>FlightBoard diagnostics</h1>";
+  r += "<p><a href='/'>&larr; back</a></p>";
+
+  // 1. WiFi
+  r += "<h2>1. WiFi</h2>";
+  r += "<div class='row'><span class='k'>Status</span><span class='v ";
+  r += (WiFi.status() == WL_CONNECTED ? "ok'>connected" : "bad'>NOT CONNECTED");
+  r += "</span></div>";
+  r += "<div class='row'><span class='k'>SSID</span><span class='v'>" + WiFi.SSID() + "</span></div>";
+  r += "<div class='row'><span class='k'>IP</span><span class='v'>" + WiFi.localIP().toString() + "</span></div>";
+  long rssi = WiFi.RSSI();
+  r += "<div class='row'><span class='k'>RSSI</span><span class='v ";
+  if (rssi > -70) r += "ok'>"; else if (rssi > -80) r += "warn'>"; else r += "bad'>";
+  r += String(rssi) + " dBm</span></div>";
+
+  // 2. NTP clock
+  r += "<h2>2. NTP clock <span style='font-size:11px;color:#8b95a7'>(required for monthly cap)</span></h2>";
+  time_t now = time(nullptr);
+  bool clockOk = (now > 1700000000);
+  r += "<div class='row'><span class='k'>System time</span><span class='v ";
+  r += (clockOk ? "ok'>" : "bad'>");
+  if (clockOk) {
+    struct tm tm; localtime_r(&now, &tm);
+    char buf[32]; strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tm);
+    r += String(buf);
+  } else {
+    r += "NOT SYNCED (" + String((long)now) + ")";
+  }
+  r += "</span></div>";
+  if (!clockOk) {
+    r += "<div class='row'><span class='v warn'>AeroAPI calls are blocked until NTP syncs. Most common cause of missing destinations on a fresh boot.</span></div>";
+  }
+
+  // 3. AeroAPI settings
+  r += "<h2>3. AeroAPI settings (loaded from NVS)</h2>";
+  r += "<div class='row'><span class='k'>Enabled</span><span class='v ";
+  r += (g_settings.aeroApiEnabled ? "ok'>YES" : "bad'>NO");
+  r += "</span></div>";
+  String k = g_settings.aeroApiKey;
+  String kMasked;
+  if (k.length() == 0) kMasked = "(EMPTY)";
+  else if (k.length() < 8) kMasked = "(too short: " + String(k.length()) + " chars)";
+  else kMasked = k.substring(0, 4) + "..." + k.substring(k.length() - 4) + "  (" + String(k.length()) + " chars)";
+  r += "<div class='row'><span class='k'>Key</span><span class='v ";
+  r += (k.length() >= 8 ? "ok'>" : "bad'>");
+  r += kMasked + "</span></div>";
+  r += "<div class='row'><span class='k'>Hourly cap</span><span class='v'>" + String(g_settings.aeroApiCallsPerHour) + "</span></div>";
+  char buf2[16]; snprintf(buf2, sizeof(buf2), "$%d.%02d", g_settings.aeroApiMonthlyCapCents/100, g_settings.aeroApiMonthlyCapCents%100);
+  r += "<div class='row'><span class='k'>Monthly cap</span><span class='v'>" + String(buf2) + "</span></div>";
+
+  // 4. Budget right now
+  r += "<h2>4. Budget right now</h2>";
+  int monthSpend = aeroApiSpendThisMonthCents();
+  int monthCap = g_settings.aeroApiMonthlyCapCents;
+  bool monthCapHit = (monthCap <= 0) || (monthSpend >= monthCap);
+  r += "<div class='row'><span class='k'>Hourly used</span><span class='v'>" + String(aeroApiCallsThisHour()) + " / " + String(g_settings.aeroApiCallsPerHour) + "</span></div>";
+  r += "<div class='row'><span class='k'>Monthly spend</span><span class='v ";
+  r += (monthCapHit ? "bad'>" : "ok'>");
+  snprintf(buf2, sizeof(buf2), "$%d.%02d", monthSpend/100, monthSpend%100);
+  r += String(buf2) + " / ";
+  snprintf(buf2, sizeof(buf2), "$%d.%02d", monthCap/100, monthCap%100);
+  r += String(buf2);
+  if (monthCapHit) r += " (CAP HIT)";
+  r += "</span></div>";
+  r += "<div class='row'><span class='k'>Calls this month</span><span class='v'>" + String(aeroApiCallsThisMonth()) + "</span></div>";
+
+  // 5. Live HTTPS test
+  r += "<h2>5. Live test (one real call, costs $0.005)</h2>";
+  if (!g_settings.aeroApiEnabled) {
+    r += "<div class='row'><span class='v warn'>AeroAPI is disabled in settings. Enable it on the API panel first.</span></div>";
+  } else if (k.length() < 8) {
+    r += "<div class='row'><span class='v bad'>No key set. Paste your AeroAPI key on the API panel and tap Save.</span></div>";
+  } else if (!clockOk) {
+    r += "<div class='row'><span class='v bad'>Clock not synced; refusing to test (the monthly counter would not be reliable).</span></div>";
+  } else {
+    WiFiClientSecure tls; tls.setInsecure();
+    HTTPClient http; http.setTimeout(8000);
+    String url = "https://aeroapi.flightaware.com/aeroapi/flights/QFA9";
+    r += "<div class='row'><span class='k'>URL</span><span class='v'>" + url + "</span></div>";
+    if (!http.begin(tls, url)) {
+      r += "<div class='row'><span class='v bad'>http.begin() failed (TLS init).</span></div>";
+    } else {
+      http.addHeader("x-apikey", k);
+      http.addHeader("Accept", "application/json");
+      unsigned long t0 = millis();
+      int code = http.GET();
+      unsigned long dt = millis() - t0;
+      r += "<div class='row'><span class='k'>HTTP status</span><span class='v ";
+      r += (code == 200 ? "ok'>" : "bad'>");
+      r += String(code) + "  (" + String(dt) + " ms)</span></div>";
+      String body = http.getString();
+      http.end();
+      if (code == 200) {
+        r += "<div class='row'><span class='v ok'>KEY WORKS. AeroAPI accepted the request.</span></div>";
+        if (body.length() > 700) body = body.substring(0, 700) + "\n... (truncated)";
+        r += "<pre>" + body + "</pre>";
+      } else if (code == 401 || code == 403) {
+        r += "<div class='row'><span class='v bad'>Key REJECTED. Wrong, expired, or suspended account.</span></div>";
+        r += "<pre>" + body + "</pre>";
+      } else if (code < 0) {
+        r += "<div class='row'><span class='v bad'>Network error (" + String(code) + "). DNS, TLS, or firewall.</span></div>";
+      } else {
+        r += "<div class='row'><span class='v warn'>Unexpected HTTP " + String(code) + ".</span></div>";
+        r += "<pre>" + body + "</pre>";
+      }
+    }
+  }
+
+  r += "<p style='margin-top:24px;color:#8b95a7;font-size:12px'>Don't refresh /diag in a loop -- each successful test costs half a cent.</p>";
+  r += "<p><a href='/'>&larr; back to FlightBoard</a></p>";
+  r += "</body></html>";
+  g_http.send(200, "text/html", r);
+}
+
 static void handleWifiReset() {
   WiFi.disconnect(true, true);
   g_http.send(200, "text/html",
@@ -567,6 +706,7 @@ bool startConfigPortal() {
   g_http.on("/save",       HTTP_POST, handleSave);
   g_http.on("/fa-reset",   handleFaReset);
   g_http.on("/wifi-reset", handleWifiReset);
+  g_http.on("/diag",       handleDiag);
   g_http.begin();
   return true;
 }
