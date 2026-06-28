@@ -1,0 +1,15 @@
+{
+  "name": "FlightBoard",
+  "version": "1.0.0",
+  "home_assistant_domain": "flightboard",
+  "funding_url": "",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "flightboard-esp32-merged.bin", "offset": 0 }
+      ]
+    }
+  ]
+}

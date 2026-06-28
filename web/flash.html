@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flash FlightBoard ESP32</title>
+  <script
+    type="module"
+    src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"
+    onerror="document.getElementById('cdn-error').style.display='block'"
+  ></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+      background: #0a0e1a; color: #e8ecf5; min-height: 100vh; margin: 0;
+      display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .card {
+      background: #131829; border: 1px solid #232b45; border-radius: 16px;
+      padding: 32px; max-width: 560px; width: 100%;
+    }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    h1::before { content: "✈ "; color: #ffb347; }
+    .sub { color: #8993ad; font-size: 14px; margin-bottom: 24px; }
+    ol { padding-left: 20px; line-height: 1.7; color: #c8d0e0; }
+    ol li { margin-bottom: 10px; }
+    code, kbd {
+      background: #1a2138; padding: 2px 6px; border-radius: 4px;
+      font-family: "SF Mono", Menlo, monospace; font-size: 13px; color: #ffb347;
+    }
+    esp-web-install-button { margin: 24px 0 12px; display: block; }
+    esp-web-install-button::part(button) {
+      background: #ffb347; color: #1a1208; border: none; padding: 14px 24px;
+      border-radius: 10px; font-weight: 700; font-size: 16px; cursor: pointer;
+      width: 100%;
+    }
+    .note {
+      background: #1a2138; border-left: 3px solid #5ec8ff; padding: 12px 16px;
+      border-radius: 6px; font-size: 13px; color: #c8d0e0; margin-top: 16px;
+    }
+    .warn {
+      background: #2a1818; border-left: 3px solid #f87171; padding: 12px 16px;
+      border-radius: 6px; font-size: 13px; color: #ffcccc; margin-top: 16px;
+    }
+    .browser-check { font-size: 13px; color: #8993ad; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>FlightBoard</h1>
+    <div class="sub">Flash your ESP32 directly from the browser</div>
+
+    <ol>
+      <li>Open this page in <strong>Chrome</strong> or <strong>Edge</strong> on a Mac, PC, or Android. Safari and iOS will not work — they don't support Web Serial.</li>
+      <li>Plug your ESP32 into a USB port using a <strong>data-capable</strong> cable (cheap charge-only cables won't work).</li>
+      <li>Click <strong>Connect</strong> below. A pop-up will ask which serial port to use — pick the one matching your ESP32 (often "USB Serial" or "CP2102" or "CH340").</li>
+      <li>Click <strong>Install FlightBoard</strong>. Erase + flash takes about 60 seconds.</li>
+      <li>When done, unplug and re-plug the ESP32. The OLED shows "WiFi setup needed" and the board creates a <code>FlightBoard-Setup</code> WiFi network. Connect to it from your phone, pick your home WiFi, done.</li>
+    </ol>
+
+    <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+
+    <div id="cdn-error" class="warn" style="display:none">
+      <strong>Could not load the flasher component</strong> from unpkg.com. Check your internet, disable any ad-blocker for this page, or use the fallback below.
+    </div>
+
+    <div class="note">
+      <strong>Fallback flasher:</strong> If the orange Install button above doesn't appear, open Espressif's hosted flasher at <a href="https://espressif.github.io/esptool-js/" style="color:#5ec8ff" target="_blank">espressif.github.io/esptool-js</a>, click <em>Connect</em>, pick your serial port, then add a single file at flash address <code>0x0</code> and upload <code>flightboard-esp32-merged.bin</code> from this folder. Click <em>Program</em>.
+    </div>
+
+    <div class="note">
+      <strong>Driver tip:</strong> On macOS Ventura+ and Windows 11, USB-serial drivers are built in for most ESP32 boards. If the port doesn't show up, install the <a href="https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers" style="color:#5ec8ff">CP210x driver</a> (most common) or the <a href="https://www.wch-ic.com/downloads/CH341SER_ZIP.html" style="color:#5ec8ff">CH340 driver</a>.
+    </div>
+
+    <div class="warn">
+      <strong>If you opened this as <code>file://...</code>:</strong> browsers block Web Serial on local files. Serve this folder over a local web server. The easiest way:<br>
+      Open the folder in Terminal and run <kbd>python3 -m http.server 8000</kbd>, then visit <code>http://localhost:8000/flash.html</code>.
+    </div>
+
+    <div class="browser-check" id="browser-check"></div>
+  </div>
+
+  <script>
+    const el = document.getElementById('browser-check');
+    if ('serial' in navigator) {
+      el.textContent = '✓ Your browser supports Web Serial. Ready to flash.';
+      el.style.color = '#4ade80';
+    } else {
+      el.textContent = '⚠ Web Serial NOT supported in this browser. Use Chrome or Edge on desktop.';
+      el.style.color = '#f87171';
+    }
+  </script>
+</body>
+</html>
