@@ -43,11 +43,17 @@ extern int  enrichBatch(Aircraft list[], int count, int maxNewCalls);
 
 // --- Tuning ---------------------------------------------------------------
 static const int          MAX_NEARBY                = 10;
-static const unsigned long POLL_INTERVAL_MS         = 8000;
-static const int          MAX_FRESH_ENRICH_PER_POLL = 2;
-// Why 2? Even at one poll every 8 seconds, 2 fresh AeroAPI calls per poll
-// is 900/hour worst case -- but cache hits and the per-hour budget gate
-// pull this back hard. In normal operation you'll see 5-15 calls/hr.
+static const unsigned long POLL_INTERVAL_MS         = 5000;
+// 5s is a good balance: catches fast jets crossing the radius without
+// monopolising the ESP32's single network stack. adsb.lol's own backend
+// refreshes every 1-2s and has no rate limit for casual use. The web admin
+// UI relies on the loop being responsive between polls -- if you drop this
+// below 3s the dashboard becomes hard to reach because the chip spends most
+// of its time in TLS handshakes.
+static const int          MAX_FRESH_ENRICH_PER_POLL = 1;
+// AeroAPI enrichment is throttled INDEPENDENTLY of position polling so a
+// fast poll rate doesn't burn through the hourly budget. We only enrich
+// 1 new callsign per poll, and the hourly cap (default 20) gates further.
 static const unsigned long RENDER_INTERVAL_MS       = 50;
 // Faster than before (was 80ms) so the ticker scrolls smoothly.
 
@@ -147,6 +153,11 @@ static void renderCurrent() {
 }
 
 void loop() {
+  // Service the web admin EVERY iteration, and again right after the heavy
+  // bits. The TLS GET inside doPoll() can take 1-3 seconds; without these
+  // extra service calls the dashboard becomes intermittently unreachable
+  // because the chip is blocked in network I/O for a big fraction of each
+  // poll cycle.
   serviceHttp();
 
   unsigned long now = millis();
@@ -155,6 +166,7 @@ void loop() {
   if (now - g_lastFetchMs >= POLL_INTERVAL_MS) {
     g_lastFetchMs = now;
     doPoll();
+    serviceHttp();            // pump HTTP right after a slow fetch
     g_lastRenderMs = 0;       // force re-render right after a fetch
   }
 
@@ -171,6 +183,7 @@ void loop() {
   if (now - g_lastRenderMs >= RENDER_INTERVAL_MS) {
     g_lastRenderMs = now;
     renderCurrent();
+    serviceHttp();            // pump HTTP right after a render too
   }
 
   delay(2);
