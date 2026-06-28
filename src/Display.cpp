@@ -180,7 +180,7 @@ static String buildTicker(const Aircraft list[], int count) {
 
     if (i < count - 1) s += "   *   ";   // separator between flights
   }
-  s += "        ";   // tail gap so the loop reads cleanly
+  s += "   *   ";   // tail separator so the loop reads as one continuous belt
   return s;
 }
 
@@ -212,30 +212,42 @@ void displayTicker(const Aircraft list[], int count,
     return;
   }
 
-  // Rebuild ticker text if data changed
+  // Rebuild ticker text if data changed.
+  //
+  // IMPORTANT: when we *do* rebuild, we keep the current scroll position
+  // (g_tickerX) instead of snapping to 128. That avoids the visible jump
+  // every time aircraft data refreshes. The double-draw below handles any
+  // momentary length change without leaving a gap.
   String sig = tickerSignature(list, count);
   if (sig != g_tickerSig) {
-    g_tickerSig = sig;
+    bool firstBuild = (g_tickerW == 0);
+    g_tickerSig  = sig;
     g_tickerText = buildTicker(list, count);
-    g_oled.setFont(u8g2_font_inb16_mr);   // INconsolata bold 16px -- great for tickers
-    g_tickerW = g_oled.getStrWidth(g_tickerText.c_str());
-    g_tickerX = 128;   // restart from right edge
+    g_oled.setFont(u8g2_font_inb16_mr);   // Inconsolata bold 16px -- great for tickers
+    g_tickerW    = g_oled.getStrWidth(g_tickerText.c_str());
+    if (firstBuild) g_tickerX = 128;      // only the very first time, start off-right
   }
 
-  // Scroll
+  // Scroll. The fix for the old stutter is in the wrap: instead of resetting
+  // to 128 (which left the screen blank until the text scrolled back in), we
+  // wrap modulo the string width. Because we draw two copies of the text
+  // (g_tickerX and g_tickerX + g_tickerW), the second copy is already in the
+  // correct on-screen position the moment the first one fully exits left --
+  // so adding g_tickerW to g_tickerX is a perfectly seamless re-anchoring.
   unsigned long now = millis();
   if (now - g_lastTickerStepMs >= 30) {     // step every 30ms
     g_lastTickerStepMs = now;
     g_tickerX -= scrollPxPerStep;
-    if (g_tickerX <= -g_tickerW) g_tickerX = 128;
+    if (g_tickerW > 0 && g_tickerX <= -g_tickerW) {
+      g_tickerX += g_tickerW;               // wrap, do NOT snap to 128
+    }
   }
 
-  // Draw the big scrolling text
+  // Draw the big scrolling text twice, so when copy A exits left, copy B is
+  // already where it needs to be. Continuous, no stutter, no blank gap.
   g_oled.setFont(u8g2_font_inb16_mr);
-  // Draw twice: once at g_tickerX, once at g_tickerX + g_tickerW, so the loop
-  // is seamless (barbershop effect).
-  g_oled.drawStr(g_tickerX, 36, g_tickerText.c_str());
-  g_oled.drawStr(g_tickerX + g_tickerW, 36, g_tickerText.c_str());
+  g_oled.drawStr(g_tickerX,              36, g_tickerText.c_str());
+  g_oled.drawStr(g_tickerX + g_tickerW,  36, g_tickerText.c_str());
 
   // Bottom status strip: aircraft count + AeroAPI badge
   g_oled.setFont(u8g2_font_5x7_tr);
