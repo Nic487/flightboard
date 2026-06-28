@@ -228,18 +228,34 @@ void displayTicker(const Aircraft list[], int count,
     if (firstBuild) g_tickerX = 128;      // only the very first time, start off-right
   }
 
-  // Scroll. The fix for the old stutter is in the wrap: instead of resetting
-  // to 128 (which left the screen blank until the text scrolled back in), we
-  // wrap modulo the string width. Because we draw two copies of the text
-  // (g_tickerX and g_tickerX + g_tickerW), the second copy is already in the
-  // correct on-screen position the moment the first one fully exits left --
-  // so adding g_tickerW to g_tickerX is a perfectly seamless re-anchoring.
+  // Scroll. CRITICAL FIX: this used to step by a fixed number of pixels each
+  // time the function was called, which made the ticker freeze every ~8s
+  // when doPoll() blocked the CPU on an HTTPS fetch to adsb.lol. After the
+  // fetch returned, the ticker would just step once and look like it had
+  // "stopped in the wrong spot" -- because it never caught up for the lost
+  // time.
+  //
+  // The fix: integrate scroll over *elapsed wall time*. If we missed 1.2s
+  // worth of frames, we jump 1.2s worth of pixels in one go, so the eye sees
+  // continuous motion at the configured speed instead of a stutter.
+  //
+  // Wrap math also fixed: g_tickerX += g_tickerW (not snap to 128). The
+  // double-draw below means the second copy is already where copy A was
+  // about to be, so re-anchoring is invisible.
   unsigned long now = millis();
-  if (now - g_lastTickerStepMs >= 30) {     // step every 30ms
+  if (g_lastTickerStepMs == 0) g_lastTickerStepMs = now;
+  unsigned long elapsed = now - g_lastTickerStepMs;
+  if (elapsed >= 16) {                       // ~60fps cap; render is gated upstream too
+    // scrollPxPerStep is "pixels per 30ms tick" in the original config UI.
+    // Convert to pixels per elapsed-ms: px = speed * elapsed / 30.
+    long px = ((long)scrollPxPerStep * (long)elapsed + 15) / 30;
+    if (px < 1) px = 1;                      // always move at least 1 px when we do step
+    if (px > 40) px = 40;                    // safety clamp after a long HTTPS stall
+    g_tickerX -= (int)px;
     g_lastTickerStepMs = now;
-    g_tickerX -= scrollPxPerStep;
-    if (g_tickerW > 0 && g_tickerX <= -g_tickerW) {
-      g_tickerX += g_tickerW;               // wrap, do NOT snap to 128
+    if (g_tickerW > 0) {
+      // Modulo wrap: handles arbitrarily large catch-up jumps.
+      while (g_tickerX <= -g_tickerW) g_tickerX += g_tickerW;
     }
   }
 
