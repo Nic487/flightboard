@@ -70,14 +70,20 @@ static int g_callLogHead = 0;
 
 static int callsInLastHour() {
   unsigned long now = millis();
-  unsigned long cutoff = now - 60UL * 60UL * 1000UL;
+  const unsigned long ONE_HOUR_MS = 60UL * 60UL * 1000UL;
   int count = 0;
   for (int i = 0; i < CALL_LOG_SIZE; ++i) {
     if (g_callLog[i] == 0) continue;
     // millis() wraps every ~49 days; in that rare case timestamps wrap too --
     // treat wrapped-past entries as expired.
     if (g_callLog[i] > now) { g_callLog[i] = 0; continue; }
-    if (g_callLog[i] >= cutoff) count++;
+    // BUG FIX: in the first hour after boot, now < ONE_HOUR_MS and the old
+    // code did (now - ONE_HOUR_MS) which underflowed an unsigned long to a
+    // huge number, so NO recorded call ever counted. Result: "0/20 this
+    // hour" forever, even when calls were firing.
+    //
+    // Correct framing: a call counts if (now - call_time) <= 1 hour.
+    if ((now - g_callLog[i]) <= ONE_HOUR_MS) count++;
   }
   return count;
 }
@@ -319,10 +325,25 @@ static bool callAeroApi(const String& callsign, CacheEntry& out) {
   // looks fine on a small OLED ticker.
   out.type     = (const char*)(f["aircraft_type"] | "");
 
+  // AeroAPI's airport objects can have any of: code_icao, code_iata, code_lid,
+  // or just `code`. Try them all in friendly-first order so the OLED gets the
+  // best label even when ICAO is missing (small/regional airports often only
+  // have IATA). icaoToIata() called downstream is a no-op if we already
+  // handed it a 3-letter code.
   JsonObjectConst origin = f["origin"].as<JsonObjectConst>();
   JsonObjectConst dest   = f["destination"].as<JsonObjectConst>();
-  out.origin = (const char*)(origin["code_icao"] | origin["code"] | "");
-  out.dest   = (const char*)(dest["code_icao"]   | dest["code"]   | "");
+  out.origin = (const char*)(origin["code_iata"] | origin["code_icao"]
+                           | origin["code"]      | origin["code_lid"] | "");
+  out.dest   = (const char*)(dest["code_iata"]   | dest["code_icao"]
+                           | dest["code"]        | dest["code_lid"]   | "");
+
+  // Log for diagnostics so the serial console shows what came back.
+  log_i("AeroAPI %s -> %s>%s op=%s type=%s",
+        callsign.c_str(),
+        out.origin.length() ? out.origin.c_str() : "?",
+        out.dest.length()   ? out.dest.c_str()   : "?",
+        out.airline.length() ? out.airline.c_str() : "-",
+        out.type.length()    ? out.type.c_str()    : "-");
 
   out.fetchedMs = millis();
   out.valid     = true;
